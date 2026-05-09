@@ -257,14 +257,17 @@ def _format_product(p: dict) -> dict:
 
 
 def _pick_best_product(products: list[dict]) -> dict:
-    """Prefer Kroger house brands that are in stock, then any in-stock item, then first result."""
-    for p in products:
-        if (p.get("brand") or "").lower() in KROGER_PREFERRED_BRANDS and p.get("in_stock", True):
-            return p
-    for p in products:
-        if p.get("in_stock", True):
-            return p
-    return products[0]
+    def score(p: dict) -> int:
+        s = 0
+        if p.get("in_stock"):
+            s += 10
+        if (p.get("brand") or "").lower() in KROGER_PREFERRED_BRANDS:
+            s += 5
+        if p.get("sale_price") is not None:
+            s += 3
+        return s
+
+    return max(products, key=score)
 
 
 mcp = FastMCP("kroger_mcp")
