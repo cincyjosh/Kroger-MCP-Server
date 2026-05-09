@@ -37,7 +37,7 @@ KROGER_BASE_URL = "https://api.kroger.com/v1"
 KROGER_AUTH_URL = "https://api.kroger.com/v1/connect/oauth2"
 TOKEN_CACHE_FILE = Path.home() / ".kroger_mcp_tokens.json"
 
-DEFAULT_ZIP = "YOUR_ZIP_CODE"  # Your City, ST
+DEFAULT_ZIP = ""
 DEFAULT_RADIUS_MILES = 10
 DEFAULT_CHAIN = "KROGER"
 
@@ -267,7 +267,7 @@ class SearchProductsInput(BaseModel):
 class FindStoreInput(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
 
-    zip_code: Optional[str] = Field(default=DEFAULT_ZIP, description=f"ZIP code to search near. Defaults to {DEFAULT_ZIP} (Your City, ST)")
+    zip_code: Optional[str] = Field(default=DEFAULT_ZIP, description="ZIP code to search near.")
     radius_miles: Optional[int] = Field(default=DEFAULT_RADIUS_MILES, description="Search radius in miles", ge=1, le=50)
 
 
@@ -312,7 +312,7 @@ async def kroger_find_store(params: FindStoreInput, ctx) -> str:
 
     Args:
         params (FindStoreInput):
-            - zip_code (str): ZIP code, defaults to YOUR_ZIP_CODE (Your City, ST)
+            - zip_code (str): ZIP code to search near
             - radius_miles (int): Search radius, defaults to 10
 
     Returns:

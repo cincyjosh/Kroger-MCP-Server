@@ -83,7 +83,7 @@ Once connected, you can say to Claude:
 > "Find my nearest Kroger store and add this week's grocery list to my cart"
 
 Claude will:
-1. Call `kroger_find_store` with your ZIP (YOUR_ZIP_CODE by default)
+1. Call `kroger_find_store` with your ZIP code
 2. Call `kroger_add_grocery_list` with all the items
 3. Report back what was added, what was skipped, and any issues
 
