@@ -21,6 +21,7 @@ import os
 import hashlib
 import base64
 import secrets
+import time
 import webbrowser
 import urllib.parse
 from contextlib import asynccontextmanager
@@ -37,7 +38,6 @@ KROGER_BASE_URL = "https://api.kroger.com/v1"
 KROGER_AUTH_URL = "https://api.kroger.com/v1/connect/oauth2"
 TOKEN_CACHE_FILE = Path.home() / ".kroger_mcp_tokens.json"
 
-DEFAULT_ZIP = ""
 DEFAULT_RADIUS_MILES = 10
 DEFAULT_CHAIN = "KROGER"
 
@@ -78,8 +78,7 @@ async def _get_client_credentials_token(client: httpx.AsyncClient) -> str:
     client_id, client_secret = _get_credentials()
     tokens = _load_tokens()
 
-    # Return cached client token if still valid
-    if tokens.get("client_access_token"):
+    if tokens.get("client_access_token") and tokens.get("client_token_expires_at", 0) > time.time() + 60:
         return tokens["client_access_token"]
 
     resp = await client.post(
@@ -93,6 +92,7 @@ async def _get_client_credentials_token(client: httpx.AsyncClient) -> str:
     resp.raise_for_status()
     data = resp.json()
     tokens["client_access_token"] = data["access_token"]
+    tokens["client_token_expires_at"] = time.time() + data.get("expires_in", 1800)
     _save_tokens(tokens)
     return data["access_token"]
 
@@ -116,7 +116,11 @@ async def _get_user_token(client: httpx.AsyncClient) -> str:
     redirect_uri = os.environ.get("KROGER_REDIRECT_URI", "http://localhost:8080/callback")
     tokens = _load_tokens()
 
-    # Try refresh token first
+    # Use cached access token if not expired (with 60s buffer)
+    if tokens.get("user_access_token") and tokens.get("user_token_expires_at", 0) > time.time() + 60:
+        return tokens["user_access_token"]
+
+    # Try refresh token
     if tokens.get("refresh_token"):
         try:
             resp = await client.post(
@@ -130,6 +134,7 @@ async def _get_user_token(client: httpx.AsyncClient) -> str:
             if resp.status_code == 200:
                 data = resp.json()
                 tokens["user_access_token"] = data["access_token"]
+                tokens["user_token_expires_at"] = time.time() + data.get("expires_in", 1800)
                 if "refresh_token" in data:
                     tokens["refresh_token"] = data["refresh_token"]
                 _save_tokens(tokens)
@@ -137,18 +142,15 @@ async def _get_user_token(client: httpx.AsyncClient) -> str:
         except Exception:
             pass
 
-    # Return cached user token
-    if tokens.get("user_access_token"):
-        return tokens["user_access_token"]
-
     # Need full OAuth flow — open browser
     verifier, challenge = _generate_pkce()
+    state = secrets.token_urlsafe(16)
     params = {
         "client_id": client_id,
         "redirect_uri": redirect_uri,
         "response_type": "code",
         "scope": CART_SCOPE,
-        "state": secrets.token_urlsafe(16),
+        "state": state,
         "code_challenge": challenge,
         "code_challenge_method": "S256",
     }
@@ -168,6 +170,11 @@ async def _get_user_token(client: httpx.AsyncClient) -> str:
 
     parsed = urllib.parse.urlparse(redirect_response)
     query_params = urllib.parse.parse_qs(parsed.query)
+
+    returned_state = query_params.get("state", [None])[0]
+    if returned_state != state:
+        raise ValueError("OAuth state mismatch. The redirect URL may have been tampered with. Please try again.")
+
     code = query_params.get("code", [None])[0]
     if not code:
         raise ValueError("No authorization code found in URL. Please try again.")
@@ -186,6 +193,7 @@ async def _get_user_token(client: httpx.AsyncClient) -> str:
     data = resp.json()
 
     tokens["user_access_token"] = data["access_token"]
+    tokens["user_token_expires_at"] = time.time() + data.get("expires_in", 1800)
     tokens["refresh_token"] = data.get("refresh_token", "")
     _save_tokens(tokens)
 
@@ -223,7 +231,6 @@ def _handle_error(e: Exception) -> str:
 
 def _format_product(p: dict) -> dict:
     """Extract the most useful fields from a Kroger product object."""
-    images = p.get("images", [])
     price_info = {}
     if p.get("items"):
         item = p["items"][0]
@@ -247,7 +254,7 @@ def _format_product(p: dict) -> dict:
 # ─── Lifespan (shared HTTP client) ───────────────────────────────────────────
 
 @asynccontextmanager
-async def app_lifespan():
+async def app_lifespan(app):
     async with httpx.AsyncClient(timeout=15.0) as client:
         yield {"client": client}
 
@@ -267,7 +274,7 @@ class SearchProductsInput(BaseModel):
 class FindStoreInput(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
 
-    zip_code: Optional[str] = Field(default=DEFAULT_ZIP, description="ZIP code to search near.")
+    zip_code: str = Field(..., description="ZIP code to search near.")
     radius_miles: Optional[int] = Field(default=DEFAULT_RADIUS_MILES, description="Search radius in miles", ge=1, le=50)
 
 
@@ -281,7 +288,7 @@ class AddToCartInput(BaseModel):
 class AddGroceryListInput(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
 
-    items: list[str] = Field(..., description="List of grocery item names to search and add (e.g. ['chicken breast', 'baby spinach', 'brown rice'])", min_items=1, max_items=50)
+    items: list[str] = Field(..., description="List of grocery item names to search and add (e.g. ['chicken breast', 'baby spinach', 'brown rice'])", min_length=1, max_length=50)
     location_id: str = Field(..., description="Kroger store location ID from kroger_find_store")
     quantity_each: Optional[int] = Field(default=1, description="Quantity to add for each item", ge=1, le=10)
 
@@ -312,7 +319,7 @@ async def kroger_find_store(params: FindStoreInput, ctx) -> str:
 
     Args:
         params (FindStoreInput):
-            - zip_code (str): ZIP code to search near
+            - zip_code (str): ZIP code to search near (required)
             - radius_miles (int): Search radius, defaults to 10
 
     Returns:
@@ -342,7 +349,7 @@ async def kroger_find_store(params: FindStoreInput, ctx) -> str:
                 "name": loc.get("name"),
                 "address": f"{addr.get('addressLine1')}, {addr.get('city')}, {addr.get('state')} {addr.get('zipCode')}",
                 "phone": loc.get("phone"),
-                "hours_monday": hours_raw.get("monday", {}).get("open24") and "Open 24hrs" or f"{hours_raw.get('monday', {}).get('open', 'N/A')} - {hours_raw.get('monday', {}).get('close', 'N/A')}",
+                "hours_monday": "Open 24hrs" if hours_raw.get("monday", {}).get("open24") else f"{hours_raw.get('monday', {}).get('open', 'N/A')} - {hours_raw.get('monday', {}).get('close', 'N/A')}",
             })
         return json.dumps({"stores": stores, "count": len(stores)}, indent=2)
     except Exception as e:
