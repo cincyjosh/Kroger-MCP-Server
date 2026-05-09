@@ -24,7 +24,6 @@ import secrets
 import time
 import webbrowser
 import urllib.parse
-from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
@@ -251,15 +250,7 @@ def _format_product(p: dict) -> dict:
     }
 
 
-# ─── Lifespan (shared HTTP client) ───────────────────────────────────────────
-
-@asynccontextmanager
-async def app_lifespan(app):
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        yield {"client": client}
-
-
-mcp = FastMCP("kroger_mcp", lifespan=app_lifespan)
+mcp = FastMCP("kroger_mcp")
 
 # ─── Input Models ─────────────────────────────────────────────────────────────
 
@@ -310,7 +301,7 @@ class ClearAuthInput(BaseModel):
         "openWorldHint": True,
     }
 )
-async def kroger_find_store(params: FindStoreInput, ctx) -> str:
+async def kroger_find_store(params: FindStoreInput) -> str:
     """
     Find Kroger store locations near a ZIP code.
 
@@ -325,35 +316,35 @@ async def kroger_find_store(params: FindStoreInput, ctx) -> str:
     Returns:
         str: JSON list of nearby stores with location IDs and addresses.
     """
-    client: httpx.AsyncClient = ctx.request_context.lifespan_state["client"]
-    try:
-        token = await _get_client_credentials_token(client)
-        resp = await client.get(
-            f"{KROGER_BASE_URL}/locations",
-            headers={"Authorization": f"Bearer {token}"},
-            params={
-                "filter.zipCode.near": params.zip_code,
-                "filter.radiusInMiles": params.radius_miles,
-                "filter.chain": DEFAULT_CHAIN,
-                "filter.limit": 5,
-            },
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        stores = []
-        for loc in data.get("data", []):
-            addr = loc.get("address", {})
-            hours_raw = loc.get("hours", {})
-            stores.append({
-                "location_id": loc.get("locationId"),
-                "name": loc.get("name"),
-                "address": f"{addr.get('addressLine1')}, {addr.get('city')}, {addr.get('state')} {addr.get('zipCode')}",
-                "phone": loc.get("phone"),
-                "hours_monday": "Open 24hrs" if hours_raw.get("monday", {}).get("open24") else f"{hours_raw.get('monday', {}).get('open', 'N/A')} - {hours_raw.get('monday', {}).get('close', 'N/A')}",
-            })
-        return json.dumps({"stores": stores, "count": len(stores)}, indent=2)
-    except Exception as e:
-        return _handle_error(e)
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        try:
+            token = await _get_client_credentials_token(client)
+            resp = await client.get(
+                f"{KROGER_BASE_URL}/locations",
+                headers={"Authorization": f"Bearer {token}"},
+                params={
+                    "filter.zipCode.near": params.zip_code,
+                    "filter.radiusInMiles": params.radius_miles,
+                    "filter.chain": DEFAULT_CHAIN,
+                    "filter.limit": 5,
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            stores = []
+            for loc in data.get("data", []):
+                addr = loc.get("address", {})
+                hours_raw = loc.get("hours", {})
+                stores.append({
+                    "location_id": loc.get("locationId"),
+                    "name": loc.get("name"),
+                    "address": f"{addr.get('addressLine1')}, {addr.get('city')}, {addr.get('state')} {addr.get('zipCode')}",
+                    "phone": loc.get("phone"),
+                    "hours_monday": "Open 24hrs" if hours_raw.get("monday", {}).get("open24") else f"{hours_raw.get('monday', {}).get('open', 'N/A')} - {hours_raw.get('monday', {}).get('close', 'N/A')}",
+                })
+            return json.dumps({"stores": stores, "count": len(stores)}, indent=2)
+        except Exception as e:
+            return _handle_error(e)
 
 
 @mcp.tool(
@@ -366,7 +357,7 @@ async def kroger_find_store(params: FindStoreInput, ctx) -> str:
         "openWorldHint": True,
     }
 )
-async def kroger_search_products(params: SearchProductsInput, ctx) -> str:
+async def kroger_search_products(params: SearchProductsInput) -> str:
     """
     Search the Kroger product catalog by keyword.
 
@@ -382,31 +373,31 @@ async def kroger_search_products(params: SearchProductsInput, ctx) -> str:
     Returns:
         str: JSON list of matching products with UPC, name, price, and aisle.
     """
-    client: httpx.AsyncClient = ctx.request_context.lifespan_state["client"]
-    try:
-        token = await _get_client_credentials_token(client)
-        query_params = {
-            "filter.term": params.query,
-            "filter.limit": params.limit,
-        }
-        if params.location_id:
-            query_params["filter.locationId"] = params.location_id
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        try:
+            token = await _get_client_credentials_token(client)
+            query_params = {
+                "filter.term": params.query,
+                "filter.limit": params.limit,
+            }
+            if params.location_id:
+                query_params["filter.locationId"] = params.location_id
 
-        resp = await client.get(
-            f"{KROGER_BASE_URL}/products",
-            headers={"Authorization": f"Bearer {token}"},
-            params=query_params,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        products = [_format_product(p) for p in data.get("data", [])]
-        return json.dumps({
-            "query": params.query,
-            "count": len(products),
-            "products": products,
-        }, indent=2)
-    except Exception as e:
-        return _handle_error(e)
+            resp = await client.get(
+                f"{KROGER_BASE_URL}/products",
+                headers={"Authorization": f"Bearer {token}"},
+                params=query_params,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            products = [_format_product(p) for p in data.get("data", [])]
+            return json.dumps({
+                "query": params.query,
+                "count": len(products),
+                "products": products,
+            }, indent=2)
+        except Exception as e:
+            return _handle_error(e)
 
 
 @mcp.tool(
@@ -419,7 +410,7 @@ async def kroger_search_products(params: SearchProductsInput, ctx) -> str:
         "openWorldHint": True,
     }
 )
-async def kroger_add_to_cart(params: AddToCartInput, ctx) -> str:
+async def kroger_add_to_cart(params: AddToCartInput) -> str:
     """
     Add a single product to the authenticated user's Kroger cart by UPC.
 
@@ -434,24 +425,24 @@ async def kroger_add_to_cart(params: AddToCartInput, ctx) -> str:
     Returns:
         str: Success confirmation or error message.
     """
-    client: httpx.AsyncClient = ctx.request_context.lifespan_state["client"]
-    try:
-        token = await _get_user_token(client)
-        resp = await client.put(
-            f"{KROGER_BASE_URL}/cart/add",
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Content-Type": "application/json",
-            },
-            json={"items": [{"upc": params.upc, "quantity": params.quantity}]},
-        )
-        resp.raise_for_status()
-        return json.dumps({
-            "success": True,
-            "message": f"Added UPC {params.upc} (qty: {params.quantity}) to your Kroger cart.",
-        }, indent=2)
-    except Exception as e:
-        return _handle_error(e)
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        try:
+            token = await _get_user_token(client)
+            resp = await client.put(
+                f"{KROGER_BASE_URL}/cart/add",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                },
+                json={"items": [{"upc": params.upc, "quantity": params.quantity}]},
+            )
+            resp.raise_for_status()
+            return json.dumps({
+                "success": True,
+                "message": f"Added UPC {params.upc} (qty: {params.quantity}) to your Kroger cart.",
+            }, indent=2)
+        except Exception as e:
+            return _handle_error(e)
 
 
 @mcp.tool(
@@ -464,7 +455,7 @@ async def kroger_add_to_cart(params: AddToCartInput, ctx) -> str:
         "openWorldHint": True,
     }
 )
-async def kroger_add_grocery_list(params: AddGroceryListInput, ctx) -> str:
+async def kroger_add_grocery_list(params: AddGroceryListInput) -> str:
     """
     Search for and add an entire grocery list to the Kroger cart in one operation.
 
@@ -483,91 +474,90 @@ async def kroger_add_grocery_list(params: AddGroceryListInput, ctx) -> str:
     Returns:
         str: JSON summary with added items, skipped items, and any errors.
     """
-    client: httpx.AsyncClient = ctx.request_context.lifespan_state["client"]
-
     added = []
     skipped = []
     errors = []
 
-    try:
-        user_token = await _get_user_token(client)
-        client_token = await _get_client_credentials_token(client)
-    except Exception as e:
-        return _handle_error(e)
-
-    for item_name in params.items:
+    async with httpx.AsyncClient(timeout=15.0) as client:
         try:
-            # Search for the product
-            search_resp = await client.get(
-                f"{KROGER_BASE_URL}/products",
-                headers={"Authorization": f"Bearer {client_token}"},
-                params={
-                    "filter.term": item_name,
-                    "filter.locationId": params.location_id,
-                    "filter.limit": 1,
-                },
-            )
-            search_resp.raise_for_status()
-            products = search_resp.json().get("data", [])
-
-            if not products:
-                skipped.append({"item": item_name, "reason": "No matching product found"})
-                continue
-
-            best = products[0]
-            upc = best.get("upc")
-            name = best.get("description", item_name)
-
-            if not upc:
-                skipped.append({"item": item_name, "reason": "Product found but no UPC available"})
-                continue
-
-            # Add to cart
-            cart_resp = await client.put(
-                f"{KROGER_BASE_URL}/cart/add",
-                headers={
-                    "Authorization": f"Bearer {user_token}",
-                    "Content-Type": "application/json",
-                },
-                json={"items": [{"upc": upc, "quantity": params.quantity_each}]},
-            )
-            cart_resp.raise_for_status()
-
-            price = None
-            if best.get("items"):
-                price = best["items"][0].get("price", {}).get("regular")
-
-            added.append({
-                "requested": item_name,
-                "matched_to": name,
-                "upc": upc,
-                "price": price,
-                "quantity": params.quantity_each,
-            })
-
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code == 401:
-                # Token expired mid-run — clear and report
-                tokens = _load_tokens()
-                tokens.pop("user_access_token", None)
-                _save_tokens(tokens)
-                errors.append({"item": item_name, "error": "Auth token expired mid-run. Please retry."})
-                break
-            errors.append({"item": item_name, "error": f"HTTP {e.response.status_code}: {e.response.text[:100]}"})
+            user_token = await _get_user_token(client)
+            client_token = await _get_client_credentials_token(client)
         except Exception as e:
-            errors.append({"item": item_name, "error": str(e)})
+            return _handle_error(e)
 
-    return json.dumps({
-        "summary": {
-            "total_requested": len(params.items),
-            "added_to_cart": len(added),
-            "skipped": len(skipped),
-            "errors": len(errors),
-        },
-        "added": added,
-        "skipped": skipped,
-        "errors": errors,
-    }, indent=2)
+        for item_name in params.items:
+            try:
+                # Search for the product
+                search_resp = await client.get(
+                    f"{KROGER_BASE_URL}/products",
+                    headers={"Authorization": f"Bearer {client_token}"},
+                    params={
+                        "filter.term": item_name,
+                        "filter.locationId": params.location_id,
+                        "filter.limit": 1,
+                    },
+                )
+                search_resp.raise_for_status()
+                products = search_resp.json().get("data", [])
+
+                if not products:
+                    skipped.append({"item": item_name, "reason": "No matching product found"})
+                    continue
+
+                best = products[0]
+                upc = best.get("upc")
+                name = best.get("description", item_name)
+
+                if not upc:
+                    skipped.append({"item": item_name, "reason": "Product found but no UPC available"})
+                    continue
+
+                # Add to cart
+                cart_resp = await client.put(
+                    f"{KROGER_BASE_URL}/cart/add",
+                    headers={
+                        "Authorization": f"Bearer {user_token}",
+                        "Content-Type": "application/json",
+                    },
+                    json={"items": [{"upc": upc, "quantity": params.quantity_each}]},
+                )
+                cart_resp.raise_for_status()
+
+                price = None
+                if best.get("items"):
+                    price = best["items"][0].get("price", {}).get("regular")
+
+                added.append({
+                    "requested": item_name,
+                    "matched_to": name,
+                    "upc": upc,
+                    "price": price,
+                    "quantity": params.quantity_each,
+                })
+
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 401:
+                    # Token expired mid-run — clear and report
+                    tokens = _load_tokens()
+                    tokens.pop("user_access_token", None)
+                    _save_tokens(tokens)
+                    errors.append({"item": item_name, "error": "Auth token expired mid-run. Please retry."})
+                    break
+                errors.append({"item": item_name, "error": f"HTTP {e.response.status_code}: {e.response.text[:100]}"})
+            except Exception as e:
+                errors.append({"item": item_name, "error": str(e)})
+
+        return json.dumps({
+            "summary": {
+                "total_requested": len(params.items),
+                "added_to_cart": len(added),
+                "skipped": len(skipped),
+                "errors": len(errors),
+            },
+            "added": added,
+            "skipped": skipped,
+            "errors": errors,
+        }, indent=2)
 
 
 @mcp.tool(
@@ -580,7 +570,7 @@ async def kroger_add_grocery_list(params: AddGroceryListInput, ctx) -> str:
         "openWorldHint": False,
     }
 )
-async def kroger_clear_auth(params: ClearAuthInput, ctx) -> str:
+async def kroger_clear_auth(params: ClearAuthInput) -> str:
     """
     Clear all stored Kroger OAuth tokens from local cache.
 

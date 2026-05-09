@@ -24,7 +24,7 @@ export KROGER_REDIRECT_URI=http://localhost:8080/callback
 ## Running the server
 
 ```bash
-python kroger_mcp_server.py
+python server.py
 ```
 
 ## Claude Desktop config (MCP registration)
@@ -35,7 +35,7 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
   "mcpServers": {
     "kroger": {
       "command": "/path/to/venv/bin/python",
-      "args": ["/path/to/kroger_mcp_server.py"],
+      "args": ["/path/to/kroger_mcp/server.py"],
       "env": {
         "KROGER_CLIENT_ID": "...",
         "KROGER_CLIENT_SECRET": "...",
@@ -48,7 +48,7 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 
 ## Architecture
 
-Single-file server (`kroger_mcp_server.py`) built on `FastMCP` with five tools. All tools receive the shared `httpx.AsyncClient` via lifespan state (`ctx.request_context.lifespan_state["client"]`).
+Single-file server (`server.py`) built on `FastMCP` with five tools. Each tool creates its own `httpx.AsyncClient(timeout=15.0)` inline via `async with` — there is no lifespan manager or shared client.
 
 **Two auth paths run in parallel:**
 - **Client Credentials** (`_get_client_credentials_token`) — used for read-only tools (`kroger_find_store`, `kroger_search_products`). No user login required.
