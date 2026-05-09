@@ -43,6 +43,12 @@ DEFAULT_CHAIN = "KROGER"
 PRODUCT_SEARCH_SCOPE = "product.compact"
 CART_SCOPE = "cart.basic:write profile.compact"
 
+KROGER_PREFERRED_BRANDS = {
+    "kroger", "private selection", "simple truth", "simple truth organic",
+    "heritage farm", "comforts", "home chef", "murray's cheese",
+    "pet pride", "splash refresh", "abound", "luvsome",
+}
+
 # ─── Token Storage ────────────────────────────────────────────────────────────
 
 def _load_tokens() -> dict:
@@ -248,6 +254,17 @@ def _format_product(p: dict) -> dict:
         "aisle": p.get("aisleLocations", [{}])[0].get("description") if p.get("aisleLocations") else None,
         **price_info,
     }
+
+
+def _pick_best_product(products: list[dict]) -> dict:
+    """Prefer Kroger house brands that are in stock, then any in-stock item, then first result."""
+    for p in products:
+        if (p.get("brand") or "").lower() in KROGER_PREFERRED_BRANDS and p.get("in_stock", True):
+            return p
+    for p in products:
+        if p.get("in_stock", True):
+            return p
+    return products[0]
 
 
 mcp = FastMCP("kroger_mcp")
@@ -494,7 +511,7 @@ async def kroger_add_grocery_list(params: AddGroceryListInput) -> str:
                     params={
                         "filter.term": item_name,
                         "filter.locationId": params.location_id,
-                        "filter.limit": 1,
+                        "filter.limit": 5,
                     },
                 )
                 search_resp.raise_for_status()
@@ -504,7 +521,7 @@ async def kroger_add_grocery_list(params: AddGroceryListInput) -> str:
                     skipped.append({"item": item_name, "reason": "No matching product found"})
                     continue
 
-                best = products[0]
+                best = _pick_best_product(products)
                 upc = best.get("upc")
                 name = best.get("description", item_name)
 
